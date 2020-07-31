@@ -9,12 +9,13 @@ namespace CulcLFHF
 	class Program
 	{
 		// 瞳孔径データを含むcsvファイルのパス
-		private static string FilePath = @"../../../Resorces/pupilOnly.csv";
+		private static string FilePath = @"../../../Resorces/pupilData.csv";
 		// csvデータを格納するリスト
 		private static List<String[]> pupilDatas = new List<String[]>();
 		// 線形補間後のデータを格納するリスト
 		private static float[,] fixedDatas;
 		private static int dataNum;
+		private static int initTime;
 
 
 		public static void Main(string[] args)
@@ -23,10 +24,20 @@ namespace CulcLFHF
 			CSVReader(FilePath, pupilDatas);
 			// データの行数を取得
 			dataNum = pupilDatas.Count;
+			// 最初のタイムスタンプを取得
+			initTime = int.Parse(pupilDatas[1][0]);
 
+			// 線形補間
+			InitData();
+
+			// フーリエ変換(LF/HF算出)
+			FFT();
+		}
+
+		private static void InitData()
+        {
 			// 線形補間後のデータを格納する２次元配列
-			fixedDatas = new float[2, dataNum];			// column名の1行目を除く行数
-			fixedDatas[0, 0] = fixedDatas[0, 1] = -1;   // column名の代わりに-1を代入
+			fixedDatas = new float[3, dataNum]; //timestamp,left,rightの3列
 
 			// 補完必要数
 			int Ncount = 0;
@@ -34,25 +45,31 @@ namespace CulcLFHF
 			int lstart = -1;
 
 			// 左右瞳孔径を順に見ていく
-			for (int LR = 0; LR < 2; LR++)
+			for (int LR = 1; LR < 3; LR++)	//1列目はtimestamp
 			{
 				// 各データを順に見ていく(1行目はColumn名なので飛ばしてi=1から)
 				for (int i = 1; i < dataNum; i++)
 				{
-					if (pupilDatas[i][LR].Equals(""))   // -1(欠損値)を見つけた場合
+					fixedDatas[0, i] = int.Parse(pupilDatas[i][0]);     //timestamp
+
+					if (pupilDatas[i][LR].Equals("-1"))   // -1(欠損値)を見つけた場合
 					{
 						// 最初の空値のとき，そこが線形補間開始位置となるので記憶
-						if (Ncount == 0) lstart = i;
+						if (Ncount == 0)
+                        {
+							lstart = i;
+							Console.WriteLine(lstart + "行目から線形補完 要求");
+						}
 						// 空白の個数をカウント
 						Ncount++;
 					}
 					else
 					{
 						// 値をそのまま代入(string→float変換だけする)
-						fixedDatas[LR, i] = float.Parse(pupilDatas[i][LR]);
+						fixedDatas[LR, i] = float.Parse(pupilDatas[i][LR]);	//瞳孔径
 
 						// 空値を見つけた後の正常値ということは，ここまでの線形補完が必要
-						if (Ncount > 0) lerp(LR, lstart, i, Ncount);
+						if (Ncount > 0) Lerp(LR, lstart, i, Ncount);
 
 						// 空値の個数をリセット
 						Ncount = 0;
@@ -61,14 +78,10 @@ namespace CulcLFHF
 			}
 			// 線形補間後のデータを書き出し(デバッグも兼ねて)
 			CSVWriter("_lerp", fixedDatas, dataNum);
-
-			// フーリエ変換(LF/HF算出)
-			FFT();
-
 		}
 
 		// 線形補完メソッド
-		private static void lerp(int LR, int lstart, int lend, int count)
+		private static void Lerp(int LR, int lstart, int lend, int count)
 		{
 			// 欠損値を順次補完していく
 			for (int i = 1, index = lstart; i <= count; i++, index++)
@@ -78,7 +91,9 @@ namespace CulcLFHF
 				// 内分点計算により値を補完
 				fixedDatas[LR, index] = (1 - t) * fixedDatas[LR, lstart - 1] + t * fixedDatas[LR, lend];
 			}
+			Console.WriteLine(lstart + "行目から" + (lend-1) + "行目の線形補間 完了");
 		}
+
 
 		private static void CSVReader(String FilePath, List<String[]> datas)
 		{
@@ -99,13 +114,13 @@ namespace CulcLFHF
 		{
 			// ファイル名に"_lerp"をつけたファイルを作成するためのパス名
 			String writefilepath = FilePath.Replace(".csv", addName + ".csv");
-
 			using (StreamWriter sw = new StreamWriter(writefilepath, false) { AutoFlush = true })
 			{
-				sw.WriteLine("Left, Right");
+				sw.WriteLine("timestamp, realtime, Left, Right");
 				for (int i = 1; i < length; i++)
 				{
-					sw.WriteLine(data[0, i] + ", " + data[1, i]);
+					Console.WriteLine(i+"行目書き出し");
+					sw.WriteLine(data[0, i] + ", " + (data[0, i]-initTime) + ", " + data[1, i] + ", " + data[2, i]);
 				}
 			}
 		}
@@ -128,7 +143,6 @@ namespace CulcLFHF
 			// 左右を順に
 			for (int LR = 0; LR < 2; LR++)
 			{
-				Console.WriteLine(LR + " pupil diameter LFHF");
 				// 4096点で128点間隔でフーリエ変換していく
 				for (int i = 1, cut = 0; cut < t; i += 128, cut++)
 				{
@@ -155,7 +169,6 @@ namespace CulcLFHF
 
 					LF_HF[LR, cut] = LF / HF;
 					HF_LFHF[LR, cut] = HF / (LF + HF);
-					Console.WriteLine(cut + "th: "+ LF_HF[LR, cut]);
 				}
 			}
 			// LF/HFのデータを書き出し
